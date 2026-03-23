@@ -6,7 +6,7 @@ An interactive visualizer built with **Pygame** that demonstrates two classic pa
 
 ## 🚀 Live Demo
 
-> **[▶ Play in Browser](https://YOUR_GITHUB_USERNAME.github.io/PEPClass_Project/)**
+> **[▶ Play in Browser](https://alfeenafsal11.github.io/PEPClass_Project/)**
 > *(Powered by Pygbag — no install needed)*
 
 ---
