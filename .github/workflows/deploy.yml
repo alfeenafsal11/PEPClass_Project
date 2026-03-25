@@ -33,7 +33,7 @@ jobs:
         run: pip install pygame pygbag
 
       - name: Build with Pygbag
-        run: python -m pygbag --build --disable-sound-format-error gui.py
+        run: python -m pygbag --build --disable-sound-format-error main.py
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

@@ -48,7 +48,7 @@ An interactive visualizer built with **Pygame** that demonstrates two classic pa
 pip install -r requirements.txt
 
 # Run the visualizer
-python gui.py
+python main.py
 ```
 
 ---
@@ -56,7 +56,7 @@ python gui.py
 ## 🌐 Build for Web (Pygbag)
 
 ```bash
-python -m pygbag --build gui.py
+python -m pygbag --build main.py
 ```
 
 Output goes to `web-build/`. Deploy the contents to GitHub Pages (see below).
@@ -67,8 +67,8 @@ Output goes to `web-build/`. Deploy the contents to GitHub Pages (see below).
 
 ```
 PEPClass_Project/
-├── gui.py          # Pygame GUI with BFS + Dijkstra visualisation
-├── main.py         # CLI version (terminal-based, no GUI)
+├── main.py         # Pygame GUI with BFS + Dijkstra visualisation
+├── cli.py          # CLI version (terminal-based, no GUI)
 ├── requirements.txt
 └── README.md
 ```

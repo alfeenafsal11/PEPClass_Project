@@ -1,301 +1,366 @@
+import pygame
 import heapq
 import queue
-import sys
+import asyncio
+
+# --- Pygame Window Setup ---
+WIDTH = 800
+
+# --- Colors ---
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+BLUE = (0, 0, 255)
+YELLOW = (255, 255, 0)
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)  # Obstacle
+PURPLE = (128, 0, 128)  # Path
+ORANGE = (255, 165, 0)  # Start
+GREY = (128, 128, 128)
+TURQUOISE = (64, 224, 208)  # End
+BROWN = (165, 42, 42)  # Weight ("Mud")
 
 
-# --- Core Logic (Same as before) ---
-
+# --- Core Logic: Node Class (from pathfinder.py) ---
 class Node:
-    """Represents each cell in the grid."""
+    """Represents each cell (or 'Spot') in the grid."""
 
-    def __init__(self, row, col, is_obstacle=False):
+    def __init__(self, row, col, width, total_rows):
         self.row = row
         self.col = col
-        self.is_obstacle = is_obstacle
-        self.weight = 1  # Default weight for Dijkstra's
+        self.x = col * width
+        self.y = row * width
+        self.color = WHITE
         self.neighbors = []
-        self.g_score = float('inf')  # Cost from start to this node
-        self.came_from = None  # To reconstruct the path
+        self.width = width
+        self.total_rows = total_rows
+
+        # Pathfinding properties
+        self.g_score = float('inf')
+        self.came_from = None
+        self.weight = 1  # Default weight
+
+    def get_pos(self):
+        return self.row, self.col
+
+    # --- Node Status Methods ---
+    def is_closed(self):
+        return self.color == RED
+
+    def is_open(self):
+        return self.color == GREEN
+
+    def is_obstacle(self):
+        return self.color == BLACK
+
+    def is_weight(self):
+        return self.color == BROWN
+
+    def is_start(self):
+        return self.color == ORANGE
+
+    def is_end(self):
+        return self.color == TURQUOISE
+
+    # --- Node Mutator Methods ---
+    def reset(self):
+        self.color = WHITE
+        self.g_score = float('inf')
+        self.came_from = None
+        self.weight = 1  # Reset weight
+
+    def make_start(self):
+        self.color = ORANGE
+
+    def make_closed(self):
+        self.color = RED
+
+    def make_open(self):
+        self.color = GREEN
+
+    def make_obstacle(self):
+        self.color = BLACK
+
+    def make_end(self):
+        self.color = TURQUOISE
+
+    def make_weight(self, weight_val=10):
+        self.color = BROWN
+        self.weight = weight_val
+
+    def make_path(self):
+        self.color = PURPLE
+
+    def draw(self, win):
+        pygame.draw.rect(win, self.color, (self.x, self.y, self.width, self.width))
+
+    def update_neighbors(self, grid):
+        """Populates the neighbors list, respecting obstacles."""
+        self.neighbors = []
+        total_cols = len(grid[self.row])
+        # DOWN
+        if self.row < self.total_rows - 1 and not grid[self.row + 1][self.col].is_obstacle():
+            self.neighbors.append(grid[self.row + 1][self.col])
+        # UP
+        if self.row > 0 and not grid[self.row - 1][self.col].is_obstacle():
+            self.neighbors.append(grid[self.row - 1][self.col])
+        # RIGHT
+        if self.col < total_cols - 1 and not grid[self.row][self.col + 1].is_obstacle():
+            self.neighbors.append(grid[self.row][self.col + 1])
+        # LEFT
+        if self.col > 0 and not grid[self.row][self.col - 1].is_obstacle():
+            self.neighbors.append(grid[self.row][self.col - 1])
 
     def __lt__(self, other):
-        """For the priority queue (heapq)."""
-        return self.g_score < other.g_score
-
-    def __repr__(self):
-        """String representation for printing."""
-        return f"Node({self.row}, {self.col})"
+        return False
 
 
-def create_grid(rows, cols):
-    """Creates a 2D list of Node objects."""
-    grid = []
-    for r in range(rows):
-        grid.append([Node(r, c) for c in range(cols)])
-    return grid
+# --- Core Logic: Algorithms (from pathfinder.py) ---
 
+def reconstruct_path(came_from, current, draw):
+    """Traces back from end node to start node and draws the path."""
+    while current in came_from:
+        current = came_from[current]
+        if current.is_start():
+            break
+        current.make_path()
+        draw()
 
-def add_neighbors(grid):
-    """Populates the neighbors list for each node, respecting obstacles."""
-    rows = len(grid)
-    cols = len(grid[0])
-    for r in range(rows):
-        for c in range(cols):
-            if grid[r][c].is_obstacle:
-                continue
-
-            # Check 4 directions
-            if r > 0 and not grid[r - 1][c].is_obstacle:  # UP
-                grid[r][c].neighbors.append(grid[r - 1][c])
-            if r < rows - 1 and not grid[r + 1][c].is_obstacle:  # DOWN
-                grid[r][c].neighbors.append(grid[r + 1][c])
-            if c > 0 and not grid[r][c - 1].is_obstacle:  # LEFT
-                grid[r][c].neighbors.append(grid[r][c - 1])
-            if c < cols - 1 and not grid[r][c + 1].is_obstacle:  # RIGHT
-                grid[r][c].neighbors.append(grid[r][c + 1])
-
-
-def reconstruct_path(end_node):
-    """Traces back from the end node to the start node."""
-    path = []
-    current = end_node
-    while current:
-        path.append((current.row, current.col))
-        current = current.came_from
-    if not path:
-        return None
-    return path[::-1]  # Reverse the path to get start -> end
-
-
-def reset_grid(grid):
-    """Resets g_scores and came_from for a new search."""
-    for row in grid:
-        for node in row:
-            node.g_score = float('inf')
-            node.came_from = None
-
-
-# --- Algorithm 1: Breadth-First Search (BFS) ---
-def bfs_search(grid, start_node, end_node):
-    reset_grid(grid)
+def bfs_search(draw, grid, start, end):
+    """Performs BFS and animates the process. Ignores weights."""
     q = queue.Queue()
+    q.put(start)
 
-    start_node.g_score = 0
-    q.put(start_node)
-
-    visited = {start_node}  # A set to prevent re-processing
+    came_from = {}  # To reconstruct path
+    visited = {start}  # A set to prevent re-processing
 
     while not q.empty():
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+
         current = q.get()
 
-        if current == end_node:
-            return reconstruct_path(end_node), visited
+        if current == end:
+            reconstruct_path(came_from, end, draw)
+            end.make_end()  # Ensure end node color persists
+            start.make_start()  # Ensure start node color persists
+            return True
 
         for neighbor in current.neighbors:
             if neighbor not in visited:
-                neighbor.came_from = current
-                neighbor.g_score = current.g_score + 1
+                came_from[neighbor] = current
                 visited.add(neighbor)
                 q.put(neighbor)
+                neighbor.make_open()  # Show it's in the queue
 
-    return None, visited
+        draw()
+
+        if current != start:
+            current.make_closed()  # Show it's been processed
+
+    return False
 
 
-# --- Algorithm 2: Dijkstra's Algorithm ---
-def dijkstra_search(grid, start_node, end_node):
-    reset_grid(grid)
-
+def dijkstra_search(draw, grid, start, end):
+    """Performs Dijkstra's and animates the process. Considers weights."""
+    count = 0
     pq = []
-    start_node.g_score = 0
-    heapq.heappush(pq, (0, start_node))
+    heapq.heappush(pq, (0, count, start))  # (g_score, count, node)
 
-    # Using a dictionary for visited to store g_score
-    # This helps in the 'if new_g_score < neighbor.g_score' check
-    visited = {start_node: 0}
-    nodes_explored = 0
+    came_from = {}
+
+    # Reset g_scores for all nodes
+    for row in grid:
+        for node in row:
+            node.g_score = float('inf')
+    start.g_score = 0
+
+    # Use a set for efficient checking of items in the PQ
+    pq_hash = {start}
 
     while pq:
-        current_g_score, current = heapq.heappop(pq)
-        nodes_explored += 1
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
 
-        if current == end_node:
-            return reconstruct_path(end_node), nodes_explored
-
-        # If we found a shorter path to this node earlier, skip
-        if current_g_score > current.g_score:
+        # Get the node with the lowest g_score
+        popped_g, _, current = heapq.heappop(pq)
+        # Lazy-deletion: skip stale entries where a shorter path was already processed
+        if popped_g > current.g_score:
             continue
+        pq_hash.discard(current)
+
+        if current == end:
+            reconstruct_path(came_from, end, draw)
+            end.make_end()
+            start.make_start()
+            return True
 
         for neighbor in current.neighbors:
+            # THIS IS THE KEY: neighbor.weight is the cost (e.g., 1 for grass, 10 for mud)
             new_g_score = current.g_score + neighbor.weight
 
             if new_g_score < neighbor.g_score:
                 neighbor.g_score = new_g_score
-                neighbor.came_from = current
-                heapq.heappush(pq, (new_g_score, neighbor))
-                visited[neighbor] = new_g_score
+                came_from[neighbor] = current
+                # Always push; stale entries are discarded via lazy-deletion below
+                count += 1
+                heapq.heappush(pq, (new_g_score, count, neighbor))
+                pq_hash.add(neighbor)
+                neighbor.make_open()
 
-    return None, nodes_explored
+        draw()
 
+        if current != start:
+            current.make_closed()
 
-# --- Helper functions for user input ---
-
-def get_grid_dimensions():
-    """Gets valid grid dimensions from the user."""
-    while True:
-        try:
-            rows = int(input("Enter number of rows: "))
-            cols = int(input("Enter number of columns: "))
-            if rows > 0 and cols > 0:
-                return rows, cols
-            print("Rows and columns must be greater than 0.")
-        except ValueError:
-            print("Invalid input. Please enter numbers.")
+    return False
 
 
-def get_obstacles(grid, rows, cols):
-    """Gets obstacle coordinates from the user."""
-    print("\nEnter obstacles. Type 'row,col' (e.g., '2,3'). Type 'done' to finish.")
-    while True:
-        user_input = input("Obstacle at: ").strip().lower()
-        if user_input == 'done':
-            break
-        try:
-            row, col = map(int, user_input.split(','))
-            if 0 <= row < rows and 0 <= col < cols:
-                grid[row][col].is_obstacle = True
-                print(f"Added obstacle at ({row},{col}).")
-            else:
-                print(f"Coordinates ({row},{col}) are out of bounds.")
-        except ValueError:
-            print("Invalid format. Please use 'row,col' or 'done'.")
+# --- GUI Helper Functions ---
+
+def make_grid(rows, width):
+    """Creates the 2D list of Node objects."""
+    grid = []
+    gap = width // rows
+    for i in range(rows):
+        grid.append([])
+        for j in range(rows):
+            node = Node(i, j, gap, rows)
+            grid[i].append(node)
+    return grid
 
 
-def get_weights(grid, rows, cols):
-    """Gets custom weights for cells from the user."""
-    print("\nEnter weighted cells (e.g., 'mud'). Type 'row,col,weight' (e.g., '3,4,10'). Type 'done' to finish.")
-    while True:
-        user_input = input("Weight at: ").strip().lower()
-        if user_input == 'done':
-            break
-        try:
-            row, col, weight = map(int, user_input.split(','))
-            if 0 <= row < rows and 0 <= col < cols:
-                if grid[row][col].is_obstacle:
-                    print(f"Cannot add weight to an obstacle at ({row},{col}).")
-                elif weight > 0:
-                    grid[row][col].weight = weight
-                    print(f"Set weight at ({row},{col}) to {weight}.")
-                else:
-                    print("Weight must be positive.")
-            else:
-                print(f"Coordinates ({row},{col}) are out of bounds.")
-        except ValueError:
-            print("Invalid format. Please use 'row,col,weight' or 'done'.")
+def draw_grid_lines(win, rows, width):
+    """Draws the grey grid lines."""
+    gap = width // rows
+    for i in range(rows):
+        pygame.draw.line(win, GREY, (0, i * gap), (width, i * gap))
+        for j in range(rows):
+            pygame.draw.line(win, GREY, (j * gap, 0), (j * gap, width))
 
 
-def get_start_end(grid, rows, cols):
-    """Gets valid start and end nodes from the user."""
-    while True:
-        try:
-            start_row, start_col = map(int, input("Enter start node (row,col): ").split(','))
-            if 0 <= start_row < rows and 0 <= start_col < cols:
-                if grid[start_row][start_col].is_obstacle:
-                    print("Start node cannot be on an obstacle.")
-                else:
-                    start_node = grid[start_row][start_col]
-                    break
-            else:
-                print(f"Coordinates ({start_row},{start_col}) are out of bounds.")
-        except ValueError:
-            print("Invalid format. Please use 'row,col'.")
+def draw(win, grid, rows, width):
+    """Main drawing function, called every frame."""
+    win.fill(WHITE)
+    for row in grid:
+        for node in row:
+            node.draw(win)  # Draw the node (colored square)
 
-    while True:
-        try:
-            end_row, end_col = map(int, input("Enter end node (row,col): ").split(','))
-            if 0 <= end_row < rows and 0 <= end_col < cols:
-                if grid[end_row][end_col].is_obstacle:
-                    print("End node cannot be on an obstacle.")
-                else:
-                    end_node = grid[end_row][end_col]
-                    break
-            else:
-                print(f"Coordinates ({end_row},{end_col}) are out of bounds.")
-        except ValueError:
-            print("Invalid format. Please use 'row,col'.")
-
-    return start_node, end_node
+    draw_grid_lines(win, rows, width)  # Draw grid lines on top
+    pygame.display.update()
 
 
-def print_complexity(rows, cols):
-    """Prints the time and space complexity analysis."""
-    v = rows * cols  # V (Vertices) = Number of nodes
-    # E (Edges) is roughly 4 * V in a grid, so O(E) is proportional to O(V)
-
-    print("\n--- Complexity Analysis ---")
-    print(f"Grid Size: {rows}x{cols}")
-    print(f"V (Vertices/Nodes): {v}")
-    print("Note: R = Rows, C = Columns, V = R * C")
-
-    print("\n[Breadth-First Search (BFS)]")
-    print("  - Time: O(V + E) which for a grid is O(V) or O(R * C)")
-    print("    - Explanation: Visits each vertex and edge exactly once.")
-    print("  - Space: O(V) or O(R * C)")
-    print("    - Explanation: In the worst case, the queue and 'visited' set")
-    print("      can store all vertices.")
-
-    print("\n[Dijkstra's Algorithm (with Priority Queue)]")
-    print("  - Time: O(E log V) or O((V + E) log V)")
-    print("    - For a grid: O((R*C) log (R*C))")
-    print("    - Explanation: Each edge is processed, and heap operations")
-    print("      (push/pop) take O(log V) time.")
-    print("  - Space: O(V + E) or O(R * C)")
-    print("    - Explanation: Stores all vertices in the priority queue")
-    print("      and 'visited' dictionary in the worst case.")
-    print("---------------------------------")
+def get_clicked_pos(pos, rows, width):
+    """Converts mouse click (x,y) to grid (row,col)."""
+    gap = width // rows
+    x, y = pos  # pygame returns (x, y); x is horizontal (col), y is vertical (row)
+    row = min(y // gap, rows - 1)
+    col = min(x // gap, rows - 1)
+    return row, col
 
 
-# --- Main execution ---
-def main():
-    print("Welcome to the Pathfinding Algorithm Visualizer Logic")
+# --- Main Program Loop ---
 
-    # 1. Get grid size
-    rows, cols = get_grid_dimensions()
-    grid = create_grid(rows, cols)
+async def main():
+    pygame.init()
+    win = pygame.display.set_mode((WIDTH, WIDTH))
+    pygame.display.set_caption("Pathfinding Visualizer (B=BFS, Space=Dijkstra, W+Click=Weight, C=Clear)")
 
-    # 2. Get obstacles
-    get_obstacles(grid, rows, cols)
+    ROWS = 15
+    grid = make_grid(ROWS, WIDTH)
 
-    # 3. Get weights
-    get_weights(grid, rows, cols)
+    start_node = None
+    end_node = None
 
-    # 4. Get Start and End
-    start_node, end_node = get_start_end(grid, rows, cols)
+    run = True
+    started = False
 
-    # 5. Build the graph connections
-    add_neighbors(grid)
+    clock = pygame.time.Clock()
 
-    # 6. Print complexity analysis
-    print_complexity(rows, cols)
+    while run:
+        clock.tick(60)  # Cap FPS
+        draw(win, grid, ROWS, WIDTH)
 
-    # 7. Run BFS
-    print("\n--- Running BFS ---")
-    bfs_path, bfs_visited = bfs_search(grid, start_node, end_node)
-    if bfs_path:
-        print(f"BFS Path Found ({len(bfs_path)} steps):")
-        print(bfs_path)
-        print(f"Nodes visited: {len(bfs_visited)}")
-    else:
-        print("BFS: No path found.")
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                run = False
 
-    # 8. Run Dijkstra's
-    print("\n--- Running Dijkstra's ---")
-    dijkstra_path, dijkstra_nodes = dijkstra_search(grid, start_node, end_node)
-    if dijkstra_path:
-        print(f"Dijkstra Path Found ({len(dijkstra_path)} steps, Cost: {end_node.g_score}):")
-        print(dijkstra_path)
-        print(f"Nodes explored (pops from pq): {dijkstra_nodes}")
-    else:
-        print("Dijkstra: No path found.")
+            if started:  # Don't allow drawing while algorithm is running
+                continue
+
+            # --- Mouse Clicks ---
+            # LEFT CLICK (0)
+            if pygame.mouse.get_pressed()[0]:
+                pos = pygame.mouse.get_pos()
+                row, col = get_clicked_pos(pos, ROWS, WIDTH)
+                node = grid[row][col]
+
+                keys = pygame.key.get_pressed()  # Check which keys are held
+
+                # Priority 1: Place Start Node
+                if not start_node and node != end_node and not keys[pygame.K_w]:
+                    start_node = node
+                    start_node.make_start()
+
+                # Priority 2: Place End Node
+                elif not end_node and node != start_node and not keys[pygame.K_w]:
+                    end_node = node
+                    end_node.make_end()
+
+                # Priority 3: Place Weight (if 'W' is held)
+                elif keys[pygame.K_w] and node != start_node and node != end_node:
+                    node.make_weight(10)  # Set weight to 10
+
+                # Priority 4: Place Obstacle
+                elif node != end_node and node != start_node:
+                    node.make_obstacle()
+
+            # RIGHT CLICK (2)
+            elif pygame.mouse.get_pressed()[2]:
+                pos = pygame.mouse.get_pos()
+                row, col = get_clicked_pos(pos, ROWS, WIDTH)
+                node = grid[row][col]
+                node.reset()  # This also resets the weight to 1
+                if node == start_node:
+                    start_node = None
+                elif node == end_node:
+                    end_node = None
+
+            # --- Keyboard Presses ---
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE and start_node and end_node:
+                    started = True
+                    # Update neighbors for all nodes right before search
+                    for row in grid:
+                        for node in row:
+                            node.update_neighbors(grid)
+
+                    # Run Dijkstra's
+                    dijkstra_search(lambda: draw(win, grid, ROWS, WIDTH), grid, start_node, end_node)
+                    started = False
+
+                if event.key == pygame.K_b and start_node and end_node:
+                    started = True
+                    for row in grid:
+                        for node in row:
+                            node.update_neighbors(grid)
+
+                    # Run BFS
+                    bfs_search(lambda: draw(win, grid, ROWS, WIDTH), grid, start_node, end_node)
+                    started = False
+
+                if event.key == pygame.K_c:
+                    # Clear grid
+                    start_node = None
+                    end_node = None
+                    grid = make_grid(ROWS, WIDTH)
+
+        await asyncio.sleep(0)  # Required for Pygbag web compatibility
+
+    pygame.quit()
 
 
+# --- Run the App ---
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
